@@ -64,12 +64,12 @@ def refresh_data_access_token():
     else:
         raise Exception('Failed to fetch data access token - response:' + response)
 
-def get_time_series_data(data_access_token):
+def get_my_energy_data_documents(data_access_token):
     date_to = date.today()
-    date_from = date_to - timedelta(weeks=1) # Fetching the previous weeks data, any existing metrics will retain the same data.
+    date_from = date_to - timedelta(days=7) # Fetching the previous weeks data, any existing metrics will retain the same data.
     metering_points_formatted = ','.join(f'"{number}"' for number in METERING_POINTS.split(','))
     
-    url = API_URL + '/meterdata/gettimeseries/' + str(date_from) + '/' + str(date_to) + '/Quarter'
+    url = API_URL + '/meterdata/gettimeseries/' + str(date_from) + '/' + str(date_to) + '/Hour'
     headers = {
         "Authorization": f"Bearer {data_access_token}",
         "Content-Type": "application/json"
@@ -80,14 +80,12 @@ def get_time_series_data(data_access_token):
     if response.status_code == 200:
         print('HTTP 200 received from API')
         response_json = response.json()
-        return response_json['result'][0]['MyEnergyData_MarketDocument']['TimeSeries']
+        return response_json['result']
 
-def get_timestamp_from_quarter(start_timestamp_str, quarter):
+def get_timestamp_from_hour(start_timestamp_str, hour):
     start_timestamp = datetime.strptime(start_timestamp_str, '%Y-%m-%dT%H:%M:%SZ')
     start_timestamp = start_timestamp.replace(tzinfo=pytz.utc).astimezone() # Calculated into local timezone
-
-    delta_minutes = (int(quarter) - 1) * 15
-    time = start_timestamp + timedelta(minutes=delta_minutes)
+    time = start_timestamp + timedelta(hours=hour)
 
     return time.timestamp()
 
@@ -97,28 +95,34 @@ class CustomCollector(object):
 
     def collect(self):
         data_access_token = get_data_access_token()
-        time_series_data = get_time_series_data(data_access_token)
+        documents = get_my_energy_data_documents(data_access_token)
 
         metric_gauge = GaugeMetricFamily('meter_data', 'Meter data from Eloverblik.dk', labels=['quality', 'business_type', 'meter_id'])
-        print(f'Number of time series found: {0 if time_series_data is None else len(time_series_data)}')
-        for time_series in time_series_data: # One per metering-id
+        print(f'Number of documents found: {0 if documents is None else len(documents)}')
+        for document in documents:
+            time_series_data = document['MyEnergyData_MarketDocument']['TimeSeries']
 
-            meter_id = time_series['mRID']
-            for period in time_series['Period']:
-                date = period['timeInterval']['start']
-                points = period['Point']
-                business_type = 'produced' if time_series['businessType'] == 'A01' else 'consumed'
+            print(f'Number of timeseries found: {0 if time_series_data is None else len(time_series_data)}')
+            for time_series in time_series_data:
+                meter_id = time_series['mRID']
 
-                print(f'Parsing meter id {meter_id} for date {date}')
-                for point in points:
-                    position = point['position']
-                    quantity = point['out_Quantity.quantity']
-                    quality = point['out_Quantity.quality']
-                    timestamp = get_timestamp_from_quarter(date, position)
 
-                    #print(f'Adding metric: quality: {quality}, business_type: {business_type}, position: {position}, quantity: {quantity}, timestamp: {timestamp}')
-                    metric_gauge.add_metric([quality, business_type, meter_id], quantity, timestamp=timestamp)
+                for period in time_series['Period']:
+                    date = period['timeInterval']['start']
+                    points = period['Point']
+                    business_type = 'production' if time_series['businessType'] == 'A01' else 'consumption'
 
+                    print(f'Parsing meter id {meter_id} for date {date}')
+                    for point in points:
+                        position = point['position']
+                        quantity = point['out_Quantity.quantity']
+                        quality = point['out_Quantity.quality']
+
+                        hour = int(position) - 1
+                        timestamp = get_timestamp_from_hour(date, hour)
+
+                        print(f'Adding metric: quality: {quality}, business_type: {business_type}, position: {position}, quantity: {quantity}, timestamp: {timestamp}')
+                        metric_gauge.add_metric([quality, business_type, meter_id], quantity, timestamp=timestamp)
         yield metric_gauge
 
 if __name__ == '__main__':
