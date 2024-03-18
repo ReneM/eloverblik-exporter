@@ -1,5 +1,5 @@
 # eloverblik-exporter
-Fetches quarterly meter data for the previous week, then exports them as metrics to any Prometheus pushgateway
+Fetches hourly meter data for the previous week, then exports them as metrics to any Prometheus pushgateway
 
 # Available environment variables
 * API_URL: Url to the Eloverblik.dk API, defaults to `https://api.eloverblik.dk/customerapi/api`
